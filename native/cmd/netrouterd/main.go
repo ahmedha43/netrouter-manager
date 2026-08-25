@@ -1,5 +1,5 @@
 // NetRouter daemon is the privileged management boundary in the bootable OS.
-// It supports a root-only Unix socket and optional mTLS for desktop clients.
+// It supports a root-only Unix socket and high-speed TCP management for WinBox clients.
 package main
 
 import (
@@ -24,10 +24,10 @@ import (
 func main() {
 	var unixSocket, listen, certificate, key, clientCA, configPath string
 	flag.StringVar(&unixSocket, "unix-socket", "/run/netrouterd.sock", "root-only Unix management socket")
-	flag.StringVar(&listen, "listen", "", "optional mTLS TCP listener, e.g. 0.0.0.0:8443")
-	flag.StringVar(&certificate, "tls-cert", "", "PEM server certificate for mTLS")
-	flag.StringVar(&key, "tls-key", "", "PEM server private key for mTLS")
-	flag.StringVar(&clientCA, "tls-client-ca", "", "PEM CA used to verify manager client certificates")
+	flag.StringVar(&listen, "listen", "0.0.0.0:8443", "TCP management listener (e.g. 0.0.0.0:8443)")
+	flag.StringVar(&certificate, "tls-cert", "", "optional PEM server certificate for mTLS")
+	flag.StringVar(&key, "tls-key", "", "optional PEM server private key for mTLS")
+	flag.StringVar(&clientCA, "tls-client-ca", "", "optional PEM CA used to verify manager client certificates")
 	flag.StringVar(&configPath, "config", "/etc/netrouter/config.json", "path to persistent config.json")
 	flag.Parse()
 
@@ -45,29 +45,38 @@ func main() {
 	netManager := network.NewManager(runner.OSExecutor{})
 
 	// 2. Start Neighbor Discovery Beacon (UDP: 8444)
-	go network.StartDiscoveryServer(ctx, cfg.System.Identity, "v0.1.3")
+	go network.StartDiscoveryServer(ctx, cfg.System.Identity, "v0.1.9")
 
 	server := service.NewWithConfig(netManager, cfgStore)
 	unixListener, err := server.ListenUnix(unixSocket)
-	if err != nil {
-		log.Fatal(err)
+	if err == nil {
+		defer os.Remove(unixSocket)
+		go serveOrLog(ctx, server, unixListener, "unix")
 	}
-	defer os.Remove(unixSocket)
-	go serveOrLog(ctx, server, unixListener, "unix")
 
 	if listen != "" {
-		tlsCfg, err := loadMTLS(certificate, key, clientCA)
-		if err != nil {
-			log.Fatal(err)
+		if certificate != "" && key != "" {
+			tlsCfg, err := loadMTLS(certificate, key, clientCA)
+			if err != nil {
+				log.Fatal(err)
+			}
+			tcpListener, err := tls.Listen("tcp", listen, tlsCfg)
+			if err != nil {
+				log.Fatal(fmt.Errorf("listen with mTLS: %w", err))
+			}
+			go serveOrLog(ctx, server, tcpListener, "mtls")
+			log.Printf("netrouterd started: mTLS on %s", listen)
+		} else {
+			tcpListener, err := net.Listen("tcp", listen)
+			if err != nil {
+				log.Fatal(fmt.Errorf("listen on tcp: %w", err))
+			}
+			go serveOrLog(ctx, server, tcpListener, "tcp")
+			log.Printf("netrouterd started: WinBox TCP protocol on %s", listen)
 		}
-		tcpListener, err := tls.Listen("tcp", listen, tlsCfg)
-		if err != nil {
-			log.Fatal(fmt.Errorf("listen with mTLS: %w", err))
-		}
-		go serveOrLog(ctx, server, tcpListener, "mtls")
 	}
 
-	log.Printf("netrouterd started: Unix socket %s, Identity: %s", unixSocket, cfg.System.Identity)
+	log.Printf("Identity: %s, Ready for WinBox Client connections.", cfg.System.Identity)
 	<-ctx.Done()
 	log.Print("netrouterd stopping")
 }
