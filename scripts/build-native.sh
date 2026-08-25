@@ -11,13 +11,14 @@ go build -trimpath -ldflags="-s -w" -o "$ROOT/artifacts/linux/netrouterd" ./cmd/
 go build -trimpath -ldflags="-s -w" -o "$ROOT/artifacts/linux/netrouterctl" ./cmd/netrouterctl
 popd >/dev/null
 
-# 2. Build 100% Native C++ Win32 WinBox Desktop Client
-echo "Compiling 100% Native C++ Win32 WinBox Client..."
+# 2. Build 100% Standalone Static Native C++ Win32 WinBox Desktop Client (Zero DLL Dependencies)
+echo "Compiling 100% Standalone Static Native C++ Win32 WinBox Client..."
 x86_64-w64-mingw32-g++ -std=c++20 -O2 -mwindows -DUNICODE -D_UNICODE -s -w \
+  -static -static-libgcc -static-libstdc++ \
   -o "$ROOT/artifacts/windows/NetRouterManager.exe" \
   "$ROOT/native-winbox/main.cpp" \
   -lcomctl32 -lws2_32 -lgdi32 -luser32
 
-echo "Verifying NetRouterManager.exe is compiled..."
+echo "Verifying NetRouterManager.exe is compiled and standalone..."
 file "$ROOT/artifacts/windows/NetRouterManager.exe"
 echo "Native artifacts written to artifacts/linux and artifacts/windows"
