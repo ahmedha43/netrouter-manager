@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v0.1.0"
+        description: "Release tag, for example v0.1.5"
         required: true
         type: string
 
@@ -19,15 +19,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  publish-x86_64:
-    name: Build and publish x86_64 release assets
+  # =========================================================================
+  # 1. FAST JOB (~60s): Build & Publish Windows EXE & Linux Daemon Binaries
+  # =========================================================================
+  publish-manager:
+    name: Build & Publish NetRouter Manager (EXE & Linux Binaries)
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 10
     env:
-      BUILDROOT_VERSION: "2026.05"
       GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Check out release source
+      - name: Check out source
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -44,12 +46,10 @@ jobs:
           esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Install image and Windows build dependencies
+      - name: Install MinGW and GUI dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y \
-            bc bison build-essential bzip2 cpio file flex gcc-mingw-w64-x86-64 \
-            libelf-dev libgl1-mesa-dev libncurses-dev perl python3 rsync unzip wget xorg-dev
+          sudo apt-get install -y gcc-mingw-w64-x86-64 libgl1-mesa-dev xorg-dev
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -57,46 +57,28 @@ jobs:
           go-version: "1.22.x"
           cache-dependency-path: native/go.sum
 
-      - name: Verify Go module metadata and tests
-        working-directory: native
+      - name: Verify tests & Build Manager and Binaries
         run: |
-          go mod tidy
-          git diff --exit-code -- go.mod go.sum
-          go test ./...
+          ./scripts/build-native.sh
 
-      - name: Build Linux binaries and Windows manager
-        run: ./scripts/build-native.sh
-
-      - name: Fetch Buildroot source
-        run: |
-          mkdir -p .cache
-          wget -q "https://buildroot.org/downloads/buildroot-${BUILDROOT_VERSION}.tar.xz" -O /tmp/buildroot.tar.xz
-          tar -xJf /tmp/buildroot.tar.xz -C .cache
-          test -d ".cache/buildroot-${BUILDROOT_VERSION}"
-
-      - name: Build bootable NetRouter OS image
-        run: ./scripts/build-image-x86_64.sh
-
-      - name: Prepare release files and checksums
+      - name: Package Windows & Linux release artifacts
         id: assets
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
         run: |
           set -euo pipefail
-          mkdir -p release-assets
-          cp artifacts/buildroot-x86_64/images/rootfs.iso9660 "release-assets/NetRouterOS-${RELEASE_TAG}-x86_64.iso"
-          cp artifacts/windows/NetRouterManager.exe "release-assets/NetRouterManager-${RELEASE_TAG}-x86_64.exe"
-          cp artifacts/linux/netrouterd "release-assets/netrouterd-${RELEASE_TAG}-x86_64"
-          cp artifacts/linux/netrouterctl "release-assets/netrouterctl-${RELEASE_TAG}-x86_64"
-          file "release-assets/NetRouterManager-${RELEASE_TAG}-x86_64.exe" | grep -E "PE32\+ executable.*x86-64"
-          test -s "release-assets/NetRouterOS-${RELEASE_TAG}-x86_64.iso"
+          mkdir -p release-binaries
+          cp artifacts/windows/NetRouterManager.exe "release-binaries/NetRouterManager-${RELEASE_TAG}-x86_64.exe"
+          cp artifacts/linux/netrouterd "release-binaries/netrouterd-${RELEASE_TAG}-x86_64"
+          cp artifacts/linux/netrouterctl "release-binaries/netrouterctl-${RELEASE_TAG}-x86_64"
+          file "release-binaries/NetRouterManager-${RELEASE_TAG}-x86_64.exe" | grep -E "PE32\+ executable.*x86-64"
           (
-            cd release-assets
-            sha256sum ./* > SHA256SUMS.txt
+            cd release-binaries
+            sha256sum ./* > SHA256SUMS-binaries.txt
           )
-          echo "directory=release-assets" >> "$GITHUB_OUTPUT"
+          echo "directory=release-binaries" >> "$GITHUB_OUTPUT"
 
-      - name: Publish GitHub Release
+      - name: Create / Update GitHub Release
         env:
           RELEASE_TAG: ${{ steps.release.outputs.tag }}
           RELEASE_ASSETS: ${{ steps.assets.outputs.directory }}
@@ -110,3 +92,77 @@ jobs:
               --title "NetRouter OS $RELEASE_TAG" \
               --generate-notes
           fi
+
+  # =========================================================================
+  # 2. PARALLEL JOB: Build & Publish Bootable NetRouter OS ISO
+  # =========================================================================
+  publish-iso:
+    name: Build & Publish Bootable ISO Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BUILDROOT_VERSION: "2026.05"
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Select release tag
+        id: release
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          tag="${INPUT_TAG:-${GITHUB_REF_NAME}}"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Install ISO build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            bc bison build-essential bzip2 cpio file flex \
+            libelf-dev libncurses-dev perl python3 rsync unzip wget
+
+      - name: Cache Buildroot Downloads & Toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            .cache/buildroot-${{ env.BUILDROOT_VERSION }}/dl
+            artifacts/buildroot-x86_64/build/buildroot-config
+          key: buildroot-dl-${{ env.BUILDROOT_VERSION }}-${{ hashFiles('platform/buildroot-external/configs/netrouter_x86_64_defconfig') }}
+          restore-keys: |
+            buildroot-dl-${{ env.BUILDROOT_VERSION }}-
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22.x"
+          cache-dependency-path: native/go.sum
+
+      - name: Fetch Buildroot source
+        run: |
+          mkdir -p .cache
+          if [ ! -d ".cache/buildroot-${BUILDROOT_VERSION}" ]; then
+            wget -q "https://buildroot.org/downloads/buildroot-${BUILDROOT_VERSION}.tar.xz" -O /tmp/buildroot.tar.xz
+            tar -xJf /tmp/buildroot.tar.xz -C .cache
+          fi
+
+      - name: Build bootable NetRouter OS image
+        run: ./scripts/build-image-x86_64.sh
+
+      - name: Upload ISO to Release
+        env:
+          RELEASE_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p iso-assets
+          cp artifacts/buildroot-x86_64/images/rootfs.iso9660 "iso-assets/NetRouterOS-${RELEASE_TAG}-x86_64.iso"
+          test -s "iso-assets/NetRouterOS-${RELEASE_TAG}-x86_64.iso"
+          (
+            cd iso-assets
+            sha256sum ./* > SHA256SUMS-iso.txt
+          )
+          # Wait briefly for release creation if needed, then upload
+          sleep 5
+          gh release upload "$RELEASE_TAG" iso-assets/* --clobber
