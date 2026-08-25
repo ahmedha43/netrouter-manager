@@ -5,6 +5,13 @@
 // 100% Identical UX, Density, Layout, and Window Hierarchy to MikroTik WinBox
 // ============================================================================
 
+#ifndef UNICODE
+#define UNICODE
+#endif
+#ifndef _UNICODE
+#define _UNICODE
+#endif
+
 #define WIN32_LEAN_AND_MEAN
 #define _WIN32_WINNT 0x0601 // Windows 7 or later
 
@@ -112,6 +119,14 @@ std::vector<uint64_t> g_trafficHistoryRX(60, 0);
 std::vector<uint64_t> g_trafficHistoryTX(60, 0);
 std::mutex g_dataMutex;
 
+// Helper function to set ListView SubItem text safely
+inline void SetListSubText(HWND hList, int item, int subItem, const std::wstring& text) {
+    LVITEMW lvi = { 0 };
+    lvi.iSubItem = subItem;
+    lvi.pszText = const_cast<LPWSTR>(text.c_str());
+    SendMessageW(hList, LVM_SETITEMTEXTW, (WPARAM)item, (LPARAM)&lvi);
+}
+
 // Forward Declarations
 LRESULT CALLBACK MainWndProc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK InterfacesWndProc(HWND, UINT, WPARAM, LPARAM);
@@ -124,7 +139,6 @@ LRESULT CALLBACK SystemWndProc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK LogsWndProc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK TerminalWndProc(HWND, UINT, WPARAM, LPARAM);
 LRESULT CALLBACK QuickSetWndProc(HWND, UINT, WPARAM, LPARAM);
-LRESULT CALLBACK ConnectDlgProc(HWND, UINT, WPARAM, LPARAM);
 
 void OpenMDIChild(const wchar_t* className, const wchar_t* title, HWND* pChildWnd, int w, int h);
 void InitSampleData();
@@ -188,7 +202,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     g_hWndMain = CreateWindowExW(
         0,
         L"NetRouterMainFrame",
-        L"NetRouter Manager v0.1.5 - admin@192.168.88.1 (NetRouter-Core)",
+        L"NetRouter Manager v0.1.7 - admin@192.168.88.1 (NetRouter-Core)",
         WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
         CW_USEDEFAULT, CW_USEDEFAULT, 1180, 740,
         NULL, NULL, hInstance, NULL
@@ -208,10 +222,10 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
 
     // Message Loop
     MSG msg;
-    while (GetMessage(&msg, NULL, 0, 0)) {
+    while (GetMessageW(&msg, NULL, 0, 0)) {
         if (!TranslateMDISysAccel(g_hWndMDIClient, &msg)) {
             TranslateMessage(&msg);
-            DispatchMessage(&msg);
+            DispatchMessageW(&msg);
         }
     }
 
@@ -303,10 +317,10 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         );
         int parts[] = { 260, 450, 650, -1 };
         SendMessage(g_hWndStatusBar, SB_SETPARTS, 4, (LPARAM)parts);
-        SendMessage(g_hWndStatusBar, SB_SETTEXTW, 0, (LPARAM)L"Connected: admin@192.168.88.1");
-        SendMessage(g_hWndStatusBar, SB_SETTEXTW, 1, (LPARAM)L"Security: mTLS TLS 1.3 Verified");
-        SendMessage(g_hWndStatusBar, SB_SETTEXTW, 2, (LPARAM)L"RouterOS Core: OK");
-        SendMessage(g_hWndStatusBar, SB_SETTEXTW, 3, (LPARAM)L"Safe Mode: OFF");
+        SendMessageW(g_hWndStatusBar, SB_SETTEXTW, 0, (LPARAM)L"Connected: admin@192.168.88.1");
+        SendMessageW(g_hWndStatusBar, SB_SETTEXTW, 1, (LPARAM)L"Security: mTLS TLS 1.3 Verified");
+        SendMessageW(g_hWndStatusBar, SB_SETTEXTW, 2, (LPARAM)L"RouterOS Core: OK");
+        SendMessageW(g_hWndStatusBar, SB_SETTEXTW, 3, (LPARAM)L"Safe Mode: OFF");
 
         return 0;
     }
@@ -426,7 +440,7 @@ LRESULT CALLBACK MainWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         return 0;
     }
 
-    return DefFrameProc(hWnd, g_hWndMDIClient, uMsg, wParam, lParam);
+    return DefFrameProcW(hWnd, g_hWndMDIClient, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -481,31 +495,33 @@ LRESULT CALLBACK InterfacesWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         SendMessage(hListView, WM_SETFONT, (WPARAM)g_hFontNormal, TRUE);
 
         // Columns
-        LVCOLUMNW lvc = { LVCF_TEXT | LVCF_WIDTH };
+        LVCOLUMNW lvc = { 0 };
+        lvc.mask = LVCF_TEXT | LVCF_WIDTH;
         const struct { const wchar_t* name; int width; } cols[] = {
             { L"Flag", 45 }, { L"Name", 80 }, { L"Role", 55 }, { L"Type", 75 },
             { L"MAC Address", 130 }, { L"MTU", 50 }, { L"IP / CIDR", 140 }, { L"RX Rate", 85 }, { L"TX Rate", 85 }
         };
 
         for (int i = 0; i < 9; i++) {
-            lvc.pszText = (LPWSTR)cols[i].name;
+            lvc.pszText = const_cast<LPWSTR>(cols[i].name);
             lvc.cx = cols[i].width;
-            ListView_InsertColumn(hListView, i, &lvc);
+            SendMessageW(hListView, LVM_INSERTCOLUMNW, (WPARAM)i, (LPARAM)&lvc);
         }
 
         // Populate Items
         std::lock_guard<std::mutex> lock(g_dataMutex);
         for (size_t i = 0; i < g_interfaces.size(); i++) {
             const auto& ifc = g_interfaces[i];
-            LVITEMW lvi = { LVIF_TEXT };
+            LVITEMW lvi = { 0 };
+            lvi.mask = LVIF_TEXT;
             lvi.iItem = (int)i;
             lvi.iSubItem = 0;
-            lvi.pszText = (LPWSTR)L"R"; // Running
-            ListView_InsertItem(hListView, &lvi);
+            lvi.pszText = const_cast<LPWSTR>(L"R");
+            SendMessageW(hListView, LVM_INSERTITEMW, 0, (LPARAM)&lvi);
 
             auto SetSub = [&](int sub, const std::string& str) {
                 std::wstring wstr(str.begin(), str.end());
-                ListView_SetItemText(hListView, (int)i, sub, (LPWSTR)wstr.c_str());
+                SetListSubText(hListView, (int)i, sub, wstr);
             };
 
             SetSub(1, ifc.name);
@@ -531,7 +547,7 @@ LRESULT CALLBACK InterfacesWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
         g_hWndInterfaces = NULL;
         break;
     }
-    return DefMDIChildProc(hWnd, uMsg, wParam, lParam);
+    return DefMDIChildProcW(hWnd, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -586,7 +602,7 @@ LRESULT CALLBACK WANWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         g_hWndWAN = NULL;
         break;
     }
-    return DefMDIChildProc(hWnd, uMsg, wParam, lParam);
+    return DefMDIChildProcW(hWnd, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -632,7 +648,7 @@ LRESULT CALLBACK LANWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam) 
         g_hWndLAN = NULL;
         break;
     }
-    return DefMDIChildProc(hWnd, uMsg, wParam, lParam);
+    return DefMDIChildProcW(hWnd, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -679,7 +695,7 @@ LRESULT CALLBACK DHCPWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         g_hWndDHCP = NULL;
         break;
     }
-    return DefMDIChildProc(hWnd, uMsg, wParam, lParam);
+    return DefMDIChildProcW(hWnd, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -698,28 +714,30 @@ LRESULT CALLBACK LeasesWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
         SendMessage(hList, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
         SendMessage(hList, WM_SETFONT, (WPARAM)g_hFontNormal, TRUE);
 
-        LVCOLUMNW lvc = { LVCF_TEXT | LVCF_WIDTH };
+        LVCOLUMNW lvc = { 0 };
+        lvc.mask = LVCF_TEXT | LVCF_WIDTH;
         const struct { const wchar_t* name; int width; } cols[] = {
             { L"Flag", 45 }, { L"IP Address", 120 }, { L"MAC Address", 140 }, { L"Host Name", 160 }, { L"Expires After", 90 }
         };
         for (int i = 0; i < 5; i++) {
-            lvc.pszText = (LPWSTR)cols[i].name;
+            lvc.pszText = const_cast<LPWSTR>(cols[i].name);
             lvc.cx = cols[i].width;
-            ListView_InsertColumn(hList, i, &lvc);
+            SendMessageW(hList, LVM_INSERTCOLUMNW, (WPARAM)i, (LPARAM)&lvc);
         }
 
         std::lock_guard<std::mutex> lock(g_dataMutex);
         for (size_t i = 0; i < g_leases.size(); i++) {
             const auto& ls = g_leases[i];
-            LVITEMW lvi = { LVIF_TEXT };
+            LVITEMW lvi = { 0 };
+            lvi.mask = LVIF_TEXT;
             lvi.iItem = (int)i;
             lvi.iSubItem = 0;
-            lvi.pszText = (LPWSTR)L"D"; // Dynamic
-            ListView_InsertItem(hList, &lvi);
+            lvi.pszText = const_cast<LPWSTR>(L"D");
+            SendMessageW(hList, LVM_INSERTITEMW, 0, (LPARAM)&lvi);
 
             auto SetSub = [&](int sub, const std::string& str) {
                 std::wstring wstr(str.begin(), str.end());
-                ListView_SetItemText(hList, (int)i, sub, (LPWSTR)wstr.c_str());
+                SetListSubText(hList, (int)i, sub, wstr);
             };
             SetSub(1, ls.ip);
             SetSub(2, ls.mac);
@@ -735,7 +753,7 @@ LRESULT CALLBACK LeasesWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
         g_hWndLeases = NULL;
         break;
     }
-    return DefMDIChildProc(hWnd, uMsg, wParam, lParam);
+    return DefMDIChildProcW(hWnd, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -810,7 +828,7 @@ LRESULT CALLBACK TrafficWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPar
         g_hWndTraffic = NULL;
         break;
     }
-    return DefMDIChildProc(hWnd, uMsg, wParam, lParam);
+    return DefMDIChildProcW(hWnd, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -830,7 +848,7 @@ LRESULT CALLBACK SystemWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
 
         CreateRow(L"Router Identity:", L"NetRouter-Core");
         CreateRow(L"Architecture:", L"x86_64 (64-bit)");
-        CreateRow(L"Operating System:", L"NetRouter OS v0.1.5");
+        CreateRow(L"Operating System:", L"NetRouter OS v0.1.7");
         CreateRow(L"Linux Kernel:", L"6.6.21-netrouter");
         CreateRow(L"CPU Model:", L"Intel Celeron J4125 @ 2.00GHz");
         CreateRow(L"Total Memory:", L"512 MB DDR4 (370 MB Free)");
@@ -841,7 +859,7 @@ LRESULT CALLBACK SystemWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPara
         g_hWndSystem = NULL;
         break;
     }
-    return DefMDIChildProc(hWnd, uMsg, wParam, lParam);
+    return DefMDIChildProcW(hWnd, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -860,14 +878,15 @@ LRESULT CALLBACK LogsWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         SendMessage(hList, LVM_SETEXTENDEDLISTVIEWSTYLE, 0, LVS_EX_FULLROWSELECT | LVS_EX_GRIDLINES);
         SendMessage(hList, WM_SETFONT, (WPARAM)g_hFontNormal, TRUE);
 
-        LVCOLUMNW lvc = { LVCF_TEXT | LVCF_WIDTH };
+        LVCOLUMNW lvc = { 0 };
+        lvc.mask = LVCF_TEXT | LVCF_WIDTH;
         const struct { const wchar_t* name; int width; } cols[] = {
             { L"Time", 120 }, { L"Facility", 80 }, { L"Message", 360 }
         };
         for (int i = 0; i < 3; i++) {
-            lvc.pszText = (LPWSTR)cols[i].name;
+            lvc.pszText = const_cast<LPWSTR>(cols[i].name);
             lvc.cx = cols[i].width;
-            ListView_InsertColumn(hList, i, &lvc);
+            SendMessageW(hList, LVM_INSERTCOLUMNW, (WPARAM)i, (LPARAM)&lvc);
         }
 
         const wchar_t* logs[][3] = {
@@ -879,12 +898,13 @@ LRESULT CALLBACK LogsWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         };
 
         for (int i = 0; i < 5; i++) {
-            LVITEMW lvi = { LVIF_TEXT };
+            LVITEMW lvi = { 0 };
+            lvi.mask = LVIF_TEXT;
             lvi.iItem = i;
-            lvi.pszText = (LPWSTR)logs[i][0];
-            ListView_InsertItem(hList, &lvi);
-            ListView_SetItemText(hList, i, 1, (LPWSTR)logs[i][1]);
-            ListView_SetItemText(hList, i, 2, (LPWSTR)logs[i][2]);
+            lvi.pszText = const_cast<LPWSTR>(logs[i][0]);
+            SendMessageW(hList, LVM_INSERTITEMW, 0, (LPARAM)&lvi);
+            SetListSubText(hList, i, 1, logs[i][1]);
+            SetListSubText(hList, i, 2, logs[i][2]);
         }
         return 0;
     }
@@ -895,7 +915,7 @@ LRESULT CALLBACK LogsWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
         g_hWndLogs = NULL;
         break;
     }
-    return DefMDIChildProc(hWnd, uMsg, wParam, lParam);
+    return DefMDIChildProcW(hWnd, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -909,7 +929,7 @@ LRESULT CALLBACK TerminalWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
     case WM_CREATE: {
         hEditHistory = CreateWindowExW(
             WS_EX_CLIENTEDGE, L"EDIT",
-            L"NetRouter OS v0.1.5 (x86_64) - Linux 6.6.21\r\nConnected via secure internal daemon IPC.\r\nType 'status', 'interfaces', 'traffic', 'leases', 'reboot', or 'help'.\r\n\r\nNetRouter-Core# ",
+            L"NetRouter OS v0.1.7 (x86_64) - Linux 6.6.21\r\nConnected via secure internal daemon IPC.\r\nType 'status', 'interfaces', 'traffic', 'leases', 'reboot', or 'help'.\r\n\r\nNetRouter-Core# ",
             WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
             0, 0, 540, 270,
             hWnd, (HMENU)901, g_hInstance, NULL
@@ -936,7 +956,7 @@ LRESULT CALLBACK TerminalWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         g_hWndTerminal = NULL;
         break;
     }
-    return DefMDIChildProc(hWnd, uMsg, wParam, lParam);
+    return DefMDIChildProcW(hWnd, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -984,7 +1004,7 @@ LRESULT CALLBACK QuickSetWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lPa
         g_hWndQuickSet = NULL;
         break;
     }
-    return DefMDIChildProc(hWnd, uMsg, wParam, lParam);
+    return DefMDIChildProcW(hWnd, uMsg, wParam, lParam);
 }
 
 // ============================================================================
@@ -1010,10 +1030,10 @@ void TelemetryThread() {
         {
             std::lock_guard<std::mutex> lock(g_dataMutex);
             // Rotate waveform history
-            g_trafficHistoryRX.erase(g_trafficHistoryRX.begin());
-            g_trafficHistoryTX.erase(g_trafficHistoryTX.begin());
+            if (g_trafficHistoryRX.size() > 0) g_trafficHistoryRX.erase(g_trafficHistoryRX.begin());
+            if (g_trafficHistoryTX.size() > 0) g_trafficHistoryTX.erase(g_trafficHistoryTX.begin());
 
-            // Generate realistic jittered rates
+            // Generate realistic rates
             uint64_t rx = 10000000 + (rand() % 8000000);
             uint64_t tx = 1500000 + (rand() % 1200000);
             g_trafficHistoryRX.push_back(rx);

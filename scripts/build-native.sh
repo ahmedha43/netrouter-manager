@@ -13,7 +13,7 @@ popd >/dev/null
 
 # 2. Build 100% Native C++ Win32 WinBox Desktop Client
 echo "Compiling 100% Native C++ Win32 WinBox Client..."
-x86_64-w64-mingw32-g++ -std=c++20 -O2 -mwindows -s -w \
+x86_64-w64-mingw32-g++ -std=c++20 -O2 -mwindows -DUNICODE -D_UNICODE -s -w \
   -o "$ROOT/artifacts/windows/NetRouterManager.exe" \
   "$ROOT/native-winbox/main.cpp" \
   -lcomctl32 -lws2_32 -lgdi32 -luser32
