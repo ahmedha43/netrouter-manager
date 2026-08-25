@@ -1,0 +1,7 @@
+config BR2_PACKAGE_NETROUTERD
+	bool "netrouterd"
+	depends on BR2_PACKAGE_HOST_GO_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_IPROUTE2
+	help
+	  Privileged NetRouter OS management daemon. It reads system state,
+	  manages validated network mutations, and serves local/optional mTLS API clients.

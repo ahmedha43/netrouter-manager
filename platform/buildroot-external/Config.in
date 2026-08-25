@@ -1,0 +1,1 @@
+source "$BR2_EXTERNAL_NETROUTER_PATH/package/netrouterd/Config.in"

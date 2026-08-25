@@ -1,0 +1,18 @@
+#!/bin/sh
+
+case "$1" in
+  start)
+    printf 'Starting netrouterd: '
+    /usr/bin/netrouterd --unix-socket /run/netrouterd.sock >/var/log/netrouterd.log 2>&1 &
+    echo "OK"
+    ;;
+  stop)
+    printf 'Stopping netrouterd: '
+    killall netrouterd 2>/dev/null || true
+    echo "OK"
+    ;;
+  restart)
+    "$0" stop
+    "$0" start
+    ;;
+esac

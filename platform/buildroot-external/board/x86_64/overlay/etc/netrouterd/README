@@ -1,0 +1,6 @@
+Remote management is deliberately disabled by default.
+
+To enable the independent Windows manager, provision a server certificate,
+server private key, and a CA that validates the Windows client certificate.
+Start netrouterd with --listen, --tls-cert, --tls-key, and --tls-client-ca.
+Never expose a management port without mutually authenticated TLS.

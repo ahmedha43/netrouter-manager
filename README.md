@@ -1,48 +1,84 @@
-# NetRouter Manager
+# NetRouter OS
 
-**NetRouter Manager** is an original, browser-based implementation of a dense native-style management interface for **NetRouter OS**. It is a frontend prototype for network engineers and administrators; it demonstrates configuration flows and simulated live telemetry without connecting to a physical router.
+**NetRouter OS** هو مشروع نظام راوتر أصلي موجّه إلى `x86_64` في الإصدار الأول. يتكون المستودع من صورة Linux قابلة للإقلاع مبنية بـBuildroot، وخدمة إدارة مقيدة مكتوبة بـGo، وعميل Windows مستقل باسم `NetRouterManager.exe`. لا توجد لوحة ويب مطلوبة لإدارة النظام في مسار المنتج الأصلي.
 
-## Included experience
+> هذا ليس بديلاً كاملاً لمنتج راوتر تجاري. ما تم بناؤه واختباره موضح أدناه بدقة، وما يزال يحتاج إلى مختبر شبكي معزول أو عتاد مرجعي مذكور صراحةً ضمن الحدود المتبقية.
 
-| Area | Included behavior |
+## المكوّنات
+
+| المكوّن | المسار | الحالة الحالية |
+| --- | --- | --- |
+| صورة نظام x86_64 | `platform/buildroot-external/` | تُنتج نواة `bzImage` وrootfs وISO هجين قابل للإقلاع. |
+| خدمة الإدارة | `native/cmd/netrouterd` | Unix socket محلي مقيد، وmTLS اختياري فقط عند توفير جميع الشهادات. |
+| أداة التشخيص | `native/cmd/netrouterctl` | تستدعي `status` و`interfaces` عبر Unix socket. |
+| عميل Windows | `native/cmd/netrouter-manager` | برنامج Fyne مستقل قابل للتجميع إلى EXE ويعرض الاتصال والحالة والواجهات. |
+| بروتوكول الإدارة | `native/internal/protocol/` | JSON بإصدار صريح وعقد مشترك بين الخدمة والعميل. |
+| الواجهة React القديمة | `client/` | نموذج واجهة تاريخي فقط، وليس مسار إدارة النظام الفعلي. |
+
+## ما تم التحقق منه محلياً
+
+| التحقق | الدليل |
 | --- | --- |
-| Application frame | Title bar, compact menus, operational toolbar, narrow navigation tree, MDI workspace, and persistent status bar. |
-| MDI workspace | Open, close, move, resize, minimize, maximize, focus, and stack child configuration windows. |
-| Router workflows | Connection dialog, neighbor discovery, Quick Set, Interfaces, WAN, LAN, DHCP server and leases, traffic monitor, System, firmware, settings, files, log, and terminal. |
-| Operational safety | Native-style confirmation dialogs for reboot and factory reset; focused error dialog for invalid connection targets. |
-| Live simulation | A small asynchronous interval updates CPU, memory, throughput, and uptime without blocking the interface. |
-| Accessibility | Semantic buttons, labelled inputs, keyboard-focus states, status text alongside color, and reduced-motion support. |
+| اختبارات Go | `cd native && go test ./...` نجح، ويغطي المدخلات، Unix socket، الإيقاف، mTLS، وقوالب DHCP/DNS وnftables. |
+| سلامة تطبيق الإعدادات | DNS/DHCP والجدار الناري يتبعان مسار **stage → validate → commit**؛ فشل `dnsmasq --test` أو `nft -c` لا يستبدل الملف النشط. |
+| خدمة داخل صورة OS | اختبار QEMU على rootfs منفصل أكد وجود `/run/netrouterd.sock` واستجابة `netrouterctl status` بحالة نظام حقيقية. |
+| إقلاع الوسيط | اختبار QEMU المباشر من `rootfs.iso9660` وصل إلى `Starting netrouterd: OK` ثم شاشة Buildroot. |
+| برنامج Windows | بُني `artifacts/windows/NetRouterManager.exe` كملف `PE32+` x86-64. لم يُشغّل بعد على جهاز Windows فعلي. |
 
-## Design language
-
-The interface follows the **Operations Station** design direction documented in [`ideas.md`](ideas.md). Its visual system uses a pale blue-gray workspace, white utility surfaces, `#2F73C9` as the restrained operational accent, compact Segoe UI–style typography, and original NetRouter branding assets. It intentionally avoids SaaS cards, oversized controls, gradients as decoration, and consumer-oriented layouts.
-
-## Project structure
+## بنية المستودع
 
 ```text
-client/
-  src/
-    components/netrouter/   Reusable MDI window, status, graph, and content components
-    lib/                    Data model, state types, formatters, and validation helpers
-    pages/Home.tsx          Main application frame and interactions
-    index.css               Native desktop design system and responsive behavior
-  index.html                Document metadata and generated brand favicon
-ideas.md                    Recorded visual direction and brand decisions
+native/                       خدمة Go، البروتوكول، عميل Windows، والاختبارات
+platform/buildroot-external/  defconfig ووصفة netrouterd وإعدادات kernel وoverlay
+scripts/                      أوامر بناء العناصر الأصلية وصورة x86_64
+docs/                         المعمارية وقرار التقنية وملاحظات البحث
+client/                       نموذج React تاريخي، لا يمثل المنتج الأصلي
 ```
 
-## Local development
+## البناء المحلي
+
+يتطلب بناء المكونات الأصلية Go 1.22 وMinGW-w64 لبناء عميل Windows. ينشئ السكربت binaries لينكس وEXE بدون تعديل شبكة الجهاز المضيف.
 
 ```bash
-pnpm install
-pnpm dev
+./scripts/build-native.sh
+file artifacts/windows/NetRouterManager.exe
 ```
 
-The managed development command is available on the workspace preview. Build and type-check commands are described in `package.json`; the automated CI workflow is added in the next implementation stage.
+صورة النظام تعتمد على Buildroot `2026.05` وbr2-external كي تبقى تخصيصات NetRouter خارج شجرة Buildroot نفسها. هذا هو المسار الموصى به لتخصيص مشروع Buildroot. [1]
 
-## Scope and safeguards
+```bash
+./scripts/build-image-x86_64.sh
+ls -lh artifacts/buildroot-x86_64/images/
+```
 
-This repository is a **frontend simulation**, not a router client. Actions such as reboot, firmware upgrade, backup, and connection validation only demonstrate the relevant interface states. No credentials, router configuration, or device communication is persisted or transmitted.
+المخرج القابل للإقلاع هو `artifacts/buildroot-x86_64/images/rootfs.iso9660`. الصورة **hybrid** وتصلح لاختبار QEMU أو للكتابة لاحقاً إلى وسيط USB مخصص للاختبار؛ لا تكتبها إلى جهاز إنتاجي قبل اجتياز اختبار العتاد والنسخ الاحتياطي.
 
-## Attribution
+```bash
+qemu-system-x86_64 \
+  -m 512M -nographic -monitor none -boot d \
+  -cdrom artifacts/buildroot-x86_64/images/rootfs.iso9660
+```
 
-The application uses an independent name, an original generated router mark, and generic technical iconography. It does not reproduce any vendor branding, vendor icons, proprietary graphical assets, or exact product visual layout.
+ولإثبات تشغيل الخدمة محلياً من دون تعديل صورة المنتج، شغّل الاختبار الذي ينسخ rootfs إلى ملف مؤقت، يضيف نص إثبات مؤقت، ثم يتحقق من socket واستجابة `status` ويطفئ QEMU تلقائياً:
+
+```bash
+./scripts/test-image-qemu.sh
+```
+
+## حدود الأمان والنطاق
+
+الخدمة لا تفتح TCP افتراضياً. لتفعيل إدارة عن بعد يجب تقديم `--listen` و`--tls-cert` و`--tls-key` و`--tls-client-ca` معاً؛ عندها تفرض TLS 1.3 وشهادة عميل موثقة. إجراءات تعديل الرابط والعنوان والمسار تتحقق من المدخلات ثم تستدعي أوامر Linux محددة فقط. إعدادات DHCP/DNS والجدار الناري تُنشأ في ملف مرحلي وتُتحقق قبل الاستبدال الذري للملف الدائم، لكن تطبيقها الحي لا ينبغي اختباره إلا في VM أو شبكة خاصة معزولة.
+
+لا يزال التالي خارج ادعاء الإصدار 0.1: اختبار EXE على Windows حقيقي، اختبار بطاقات شبكة وقرص على mini-PC، معاملات إعدادات دائمة مع rollback، اختبار تكاملي DHCP/NAT/firewall في namespace أو VM، PPPoE وVPN وبروتوكولات routing، والنسخ الاحتياطي والتحديث ودعم ARM.
+
+## CI
+
+مسار GitHub Actions الأصلي يشغّل اختبارات Go، ويبني daemon وctl وWindows EXE، ويتحقق من نوع EXE ثم يرفع artifacts. لا يبني صورة Buildroot كاملة في CI حالياً بسبب كلفة البناء والتخزين؛ يبقى بناء ISO واختبار QEMU جزءاً من التحقق المحلي المنضبط.
+
+## الملكية والاستقلالية
+
+يستخدم المشروع اسماً وبروتوكولاً وأصولاً مستقلة. لا يعيد استخدام أي شعار أو كود أو أيقونات أو أصول رسومية أو بروتوكول مملوك لمنتج راوتر آخر.
+
+## المراجع
+
+[1] [Buildroot Manual — project-specific customizations outside Buildroot](https://buildroot.org/downloads/manual/customize-outside-br.txt)
