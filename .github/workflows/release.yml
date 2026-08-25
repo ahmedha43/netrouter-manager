@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag, for example v0.1.5"
+        description: "Release tag, for example v0.1.7"
         required: true
         type: string
 
@@ -20,10 +20,10 @@ concurrency:
 
 jobs:
   # =========================================================================
-  # 1. FAST JOB (~60s): Build & Publish Windows EXE & Linux Daemon Binaries
+  # 1. FAST JOB (~60s): Build & Publish Native C++ WinBox Manager & Linux Binaries
   # =========================================================================
   publish-manager:
-    name: Build & Publish NetRouter Manager (EXE & Linux Binaries)
+    name: Build & Publish Native C++ WinBox Manager (EXE & Linux Binaries)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
@@ -46,10 +46,10 @@ jobs:
           esac
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
 
-      - name: Install MinGW and GUI dependencies
+      - name: Install MinGW C++ Compiler and Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64 libgl1-mesa-dev xorg-dev
+          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 file
 
       - name: Set up Go
         uses: actions/setup-go@v5
@@ -57,7 +57,7 @@ jobs:
           go-version: "1.22.x"
           cache-dependency-path: native/go.sum
 
-      - name: Verify tests & Build Manager and Binaries
+      - name: Build Native C++ WinBox Manager & Linux Binaries
         run: |
           ./scripts/build-native.sh
 
@@ -163,6 +163,5 @@ jobs:
             cd iso-assets
             sha256sum ./* > SHA256SUMS-iso.txt
           )
-          # Wait briefly for release creation if needed, then upload
           sleep 5
           gh release upload "$RELEASE_TAG" iso-assets/* --clobber
