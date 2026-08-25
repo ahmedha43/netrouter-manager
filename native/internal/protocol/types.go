@@ -10,11 +10,16 @@ type Method string
 
 const (
 	GetSystemStatus Method = "system.status"
+	SetIdentity     Method = "system.identity.set"
+	RebootSystem    Method = "system.reboot"
+	GetSystemLogs   Method = "system.logs.get"
 	ListInterfaces  Method = "network.interfaces.list"
+	GetTrafficStats Method = "network.traffic.stats"
 	SetLinkState    Method = "network.link.set_state"
 	AssignAddress   Method = "network.address.assign"
 	ReplaceRoute    Method = "network.route.replace_default"
 	ApplyDHCPDNS    Method = "services.dhcp_dns.apply"
+	ListDHCPLeases  Method = "services.dhcp.leases.list"
 	ApplyFirewall   Method = "firewall.apply"
 )
 
@@ -56,6 +61,47 @@ type Interface struct {
 	Up        bool     `json:"up"`
 	Running   bool     `json:"running"`
 	Addresses []string `json:"addresses"`
+}
+
+type InterfaceTraffic struct {
+	Name        string `json:"name"`
+	RxBytes     uint64 `json:"rx_bytes"`
+	TxBytes     uint64 `json:"tx_bytes"`
+	RxPackets   uint64 `json:"rx_packets"`
+	TxPackets   uint64 `json:"tx_packets"`
+	RxRateBps   uint64 `json:"rx_rate_bps"`
+	TxRateBps   uint64 `json:"tx_rate_bps"`
+}
+
+type TrafficStats struct {
+	Timestamp  int64              `json:"timestamp"`
+	Interfaces []InterfaceTraffic `json:"interfaces"`
+}
+
+type DHCPLease struct {
+	IPAddress      string `json:"ip_address"`
+	MACAddress     string `json:"mac_address"`
+	Hostname       string `json:"hostname"`
+	ExpirationTime int64  `json:"expiration_time"`
+	IsStatic       bool   `json:"is_static"`
+}
+
+type SetIdentityParams struct {
+	Identity string `json:"identity"`
+}
+
+type RebootParams struct {
+	Force bool `json:"force"`
+}
+
+type LogEntry struct {
+	Timestamp string `json:"timestamp"`
+	Facility  string `json:"facility"`
+	Message   string `json:"message"`
+}
+
+type SystemLogs struct {
+	Entries []LogEntry `json:"entries"`
 }
 
 type SetLinkStateParams struct {

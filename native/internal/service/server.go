@@ -110,8 +110,24 @@ func (s *Server) call(ctx context.Context, request protocol.Request) (any, error
 	switch request.Method {
 	case protocol.GetSystemStatus:
 		return network.ReadSystemStatus()
+	case protocol.SetIdentity:
+		var params protocol.SetIdentityParams
+		if err := json.Unmarshal(request.Params, &params); err != nil {
+			return nil, fmt.Errorf("decode identity: %w", err)
+		}
+		return map[string]bool{"ok": true}, s.network.SetIdentity(ctx, params)
+	case protocol.RebootSystem:
+		var params protocol.RebootParams
+		if len(request.Params) > 0 {
+			_ = json.Unmarshal(request.Params, &params)
+		}
+		return map[string]bool{"ok": true}, s.network.RebootSystem(ctx, params)
+	case protocol.GetSystemLogs:
+		return network.ReadSystemLogs(), nil
 	case protocol.ListInterfaces:
 		return s.network.ListInterfaces()
+	case protocol.GetTrafficStats:
+		return network.ReadTrafficStats()
 	case protocol.SetLinkState:
 		var params protocol.SetLinkStateParams
 		if err := json.Unmarshal(request.Params, &params); err != nil {
@@ -136,6 +152,8 @@ func (s *Server) call(ctx context.Context, request protocol.Request) (any, error
 			return nil, fmt.Errorf("decode DHCP/DNS configuration: %w", err)
 		}
 		return map[string]bool{"ok": true}, s.network.ApplyDHCPDNS(ctx, params)
+	case protocol.ListDHCPLeases:
+		return s.network.ListDHCPLeases()
 	case protocol.ApplyFirewall:
 		var params protocol.FirewallParams
 		if err := json.Unmarshal(request.Params, &params); err != nil {

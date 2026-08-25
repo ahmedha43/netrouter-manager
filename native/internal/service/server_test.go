@@ -6,6 +6,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -26,8 +27,10 @@ func TestUnixSocketStatusRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stat socket: %v", err)
 	}
-	if got := info.Mode().Perm(); got != 0o660 {
-		t.Fatalf("socket mode = %o, want 660", got)
+	if runtime.GOOS != "windows" {
+		if got := info.Mode().Perm(); got != 0o660 {
+			t.Fatalf("socket mode = %o, want 660", got)
+		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
