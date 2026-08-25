@@ -12,17 +12,29 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
+	"github.com/ahmedha43/netrouter-manager/native/internal/config"
 	"github.com/ahmedha43/netrouter-manager/native/internal/network"
 	"github.com/ahmedha43/netrouter-manager/native/internal/protocol"
 )
 
 type Server struct {
 	network     *network.Manager
+	configStore *config.Store
 	connections sync.Map
 }
 
-func New(manager *network.Manager) *Server { return &Server{network: manager} }
+func New(manager *network.Manager) *Server {
+	return NewWithConfig(manager, config.NewStore(""))
+}
+
+func NewWithConfig(manager *network.Manager, store *config.Store) *Server {
+	return &Server{
+		network:     manager,
+		configStore: store,
+	}
+}
 
 func (s *Server) ListenUnix(path string) (net.Listener, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -124,6 +136,22 @@ func (s *Server) call(ctx context.Context, request protocol.Request) (any, error
 		return map[string]bool{"ok": true}, s.network.RebootSystem(ctx, params)
 	case protocol.GetSystemLogs:
 		return network.ReadSystemLogs(), nil
+	case protocol.ExportConfig:
+		if s.configStore == nil {
+			return nil, fmt.Errorf("config store not available")
+		}
+		return s.configStore.Export()
+	case protocol.ImportConfig:
+		if s.configStore == nil {
+			return nil, fmt.Errorf("config store not available")
+		}
+		var params protocol.ImportConfigParams
+		if err := json.Unmarshal(request.Params, &params); err != nil {
+			return nil, fmt.Errorf("decode import config: %w", err)
+		}
+		return map[string]bool{"ok": true}, s.configStore.Import([]byte(params.ConfigJSON))
+	case protocol.ScanNeighbors:
+		return network.ScanNeighbors(2 * time.Second)
 	case protocol.ListInterfaces:
 		return s.network.ListInterfaces()
 	case protocol.GetTrafficStats:
@@ -160,6 +188,18 @@ func (s *Server) call(ctx context.Context, request protocol.Request) (any, error
 			return nil, fmt.Errorf("decode firewall configuration: %w", err)
 		}
 		return map[string]bool{"ok": true}, s.network.ApplyFirewall(ctx, params)
+	case protocol.ApplyPPPoE:
+		var cfg config.PPPoEConfig
+		if err := json.Unmarshal(request.Params, &cfg); err != nil {
+			return nil, fmt.Errorf("decode PPPoE configuration: %w", err)
+		}
+		return map[string]bool{"ok": true}, s.network.ApplyPPPoE(ctx, cfg, "ether1")
+	case protocol.ApplyWireGuard:
+		var cfg config.WireGuardConfig
+		if err := json.Unmarshal(request.Params, &cfg); err != nil {
+			return nil, fmt.Errorf("decode WireGuard configuration: %w", err)
+		}
+		return map[string]bool{"ok": true}, s.network.ApplyWireGuard(ctx, cfg)
 	default:
 		return nil, fmt.Errorf("unsupported method %q", request.Method)
 	}

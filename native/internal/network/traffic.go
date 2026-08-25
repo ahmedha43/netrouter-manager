@@ -15,6 +15,9 @@ var (
 	trafficMu    sync.Mutex
 	lastSnapshot map[string]rawCounters
 	lastTime     time.Time
+	rxHistory    = make(map[string][]uint64)
+	txHistory    = make(map[string][]uint64)
+	maxHistory   = 60
 )
 
 type rawCounters struct {
@@ -31,7 +34,6 @@ func ReadTrafficStats() (protocol.TrafficStats, error) {
 	now := time.Now()
 	counters, err := parseProcNetDev("/proc/net/dev")
 	if err != nil {
-		// Fallback for non-Linux / development environments
 		counters = generateFallbackCounters()
 	}
 
@@ -52,14 +54,33 @@ func ReadTrafficStats() (protocol.TrafficStats, error) {
 			}
 		}
 
+		// Append to ring buffer history
+		rHistory := rxHistory[name]
+		tHistory := txHistory[name]
+
+		rHistory = append(rHistory, rxRate)
+		tHistory = append(tHistory, txRate)
+
+		if len(rHistory) > maxHistory {
+			rHistory = rHistory[len(rHistory)-maxHistory:]
+		}
+		if len(tHistory) > maxHistory {
+			tHistory = tHistory[len(tHistory)-maxHistory:]
+		}
+
+		rxHistory[name] = rHistory
+		txHistory[name] = tHistory
+
 		items = append(items, protocol.InterfaceTraffic{
-			Name:      name,
-			RxBytes:   cur.rxBytes,
-			TxBytes:   cur.txBytes,
-			RxPackets: cur.rxPackets,
-			TxPackets: cur.txPackets,
-			RxRateBps: rxRate,
-			TxRateBps: txRate,
+			Name:          name,
+			RxBytes:       cur.rxBytes,
+			TxBytes:       cur.txBytes,
+			RxPackets:     cur.rxPackets,
+			TxPackets:     cur.txPackets,
+			RxRateBps:     rxRate,
+			TxRateBps:     txRate,
+			HistoryRxRate: rHistory,
+			HistoryTxRate: tHistory,
 		})
 	}
 
@@ -85,7 +106,7 @@ func parseProcNetDev(path string) (map[string]rawCounters, error) {
 	for scanner.Scan() {
 		lineNum++
 		if lineNum <= 2 {
-			continue // Skip headers
+			continue
 		}
 		line := strings.TrimSpace(scanner.Text())
 		parts := strings.SplitN(line, ":", 2)

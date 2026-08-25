@@ -13,6 +13,8 @@ const (
 	SetIdentity     Method = "system.identity.set"
 	RebootSystem    Method = "system.reboot"
 	GetSystemLogs   Method = "system.logs.get"
+	ExportConfig    Method = "system.config.export"
+	ImportConfig    Method = "system.config.import"
 	ListInterfaces  Method = "network.interfaces.list"
 	GetTrafficStats Method = "network.traffic.stats"
 	SetLinkState    Method = "network.link.set_state"
@@ -21,6 +23,9 @@ const (
 	ApplyDHCPDNS    Method = "services.dhcp_dns.apply"
 	ListDHCPLeases  Method = "services.dhcp.leases.list"
 	ApplyFirewall   Method = "firewall.apply"
+	ApplyPPPoE      Method = "network.wan.pppoe.apply"
+	ApplyWireGuard  Method = "services.vpn.wireguard.apply"
+	ScanNeighbors   Method = "discovery.neighbors.scan"
 )
 
 type Request struct {
@@ -64,13 +69,15 @@ type Interface struct {
 }
 
 type InterfaceTraffic struct {
-	Name        string `json:"name"`
-	RxBytes     uint64 `json:"rx_bytes"`
-	TxBytes     uint64 `json:"tx_bytes"`
-	RxPackets   uint64 `json:"rx_packets"`
-	TxPackets   uint64 `json:"tx_packets"`
-	RxRateBps   uint64 `json:"rx_rate_bps"`
-	TxRateBps   uint64 `json:"tx_rate_bps"`
+	Name          string   `json:"name"`
+	RxBytes       uint64   `json:"rx_bytes"`
+	TxBytes       uint64   `json:"tx_bytes"`
+	RxPackets     uint64   `json:"rx_packets"`
+	TxPackets     uint64   `json:"tx_packets"`
+	RxRateBps     uint64   `json:"rx_rate_bps"`
+	TxRateBps     uint64   `json:"tx_rate_bps"`
+	HistoryRxRate []uint64 `json:"history_rx_rate,omitempty"`
+	HistoryTxRate []uint64 `json:"history_tx_rate,omitempty"`
 }
 
 type TrafficStats struct {
@@ -133,4 +140,8 @@ type FirewallParams struct {
 	LANInterface      string `json:"lan_interface"`
 	WANInterface      string `json:"wan_interface"`
 	ManagementTCPPort uint16 `json:"management_tcp_port"`
+}
+
+type ImportConfigParams struct {
+	ConfigJSON string `json:"config_json"`
 }

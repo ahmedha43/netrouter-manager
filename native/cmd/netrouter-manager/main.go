@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -21,16 +22,18 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/ahmedha43/netrouter-manager/native/internal/config"
 	managerclient "github.com/ahmedha43/netrouter-manager/native/internal/manager"
+	"github.com/ahmedha43/netrouter-manager/native/internal/network"
 	"github.com/ahmedha43/netrouter-manager/native/internal/protocol"
 )
 
 type appState struct {
-	mu           sync.RWMutex
-	client       *managerclient.Client
-	connected    bool
-	routerAddr   string
-	safeMode     bool
+	mu         sync.RWMutex
+	client     *managerclient.Client
+	connected  bool
+	routerAddr string
+	safeMode   bool
 
 	// Live Telemetry
 	status     protocol.SystemStatus
@@ -38,6 +41,9 @@ type appState struct {
 	traffic    protocol.TrafficStats
 	leases     []protocol.DHCPLease
 	logs       []protocol.LogEntry
+
+	// Discovered Neighbors
+	neighbors []network.NeighborDevice
 
 	// UI Toolbar Widgets
 	lblSession  *widget.Label
@@ -61,6 +67,7 @@ type appState struct {
 	trafficLANTX *widget.ProgressBar
 	lblWANStats  *widget.Label
 	lblLANStats  *widget.Label
+	lblWaveform  *widget.Label
 	termHistory  *widget.Entry
 }
 
@@ -68,7 +75,7 @@ func main() {
 	a := app.NewWithID("io.netrouter.manager")
 	a.Settings().SetTheme(theme.LightTheme())
 	w := a.NewWindow("NetRouter Manager - [WinBox Style Management Console]")
-	w.Resize(fyne.NewSize(1200, 780))
+	w.Resize(fyne.NewSize(1240, 800))
 
 	state := &appState{
 		window:      w,
@@ -77,6 +84,7 @@ func main() {
 		lblRAM:      widget.NewLabel("RAM: —"),
 		lblUptime:   widget.NewLabel("Up: 00:00:00"),
 		lblSecurity: widget.NewLabel("[mTLS: None]"),
+		lblWaveform: widget.NewLabelWithStyle("Traffic Waveform: [Collecting time-series metrics...]", fyne.TextAlignLeading, fyne.TextStyle{Monospace: true}),
 	}
 
 	// 1. Top Menus
@@ -103,7 +111,9 @@ func main() {
 		"DHCP Leases",
 		"Firewall",
 		"Traffic Monitor",
+		"WireGuard VPN",
 		"System",
+		"Backup & Restore",
 		"Files",
 		"Log",
 		"New Terminal",
@@ -146,7 +156,7 @@ func main() {
 		container.NewPadded(navPanel),
 		state.mdiTabs,
 	)
-	split.SetOffset(0.16) // Narrow compact left navigation
+	split.SetOffset(0.16)
 
 	content := container.NewBorder(toolbar, statusBar, nil, nil, split)
 	w.SetContent(content)
@@ -173,8 +183,7 @@ func main() {
 func makeMainMenu(w fyne.Window, state *appState) *fyne.MainMenu {
 	sessionMenu := fyne.NewMenu("Session",
 		fyne.NewMenuItem("New Session", func() { showConnectDialog(w, state) }),
-		fyne.NewMenuItem("Open Session...", func() {}),
-		fyne.NewMenuItem("Save Session", func() {}),
+		fyne.NewMenuItem("Discover Neighbors...", func() { showConnectDialog(w, state) }),
 		fyne.NewMenuItemSeparator(),
 		fyne.NewMenuItem("Close All Windows", func() {
 			for len(state.mdiTabs.Items) > 0 {
@@ -247,8 +256,12 @@ func handleNavSelection(state *appState, name string) {
 		addOrFocusTab(state, "Firewall", theme.VisibilityIcon(), makeFirewallPanel(state))
 	case "Traffic Monitor":
 		addOrFocusTab(state, "Traffic Monitor", theme.HistoryIcon(), makeTrafficPanel(state))
+	case "WireGuard VPN":
+		addOrFocusTab(state, "WireGuard VPN", theme.RadioButtonIcon(), makeWireGuardPanel(state))
 	case "System":
 		addOrFocusTab(state, "System", theme.InfoIcon(), makeSystemPanel(state))
+	case "Backup & Restore":
+		addOrFocusTab(state, "Backup & Restore", theme.DocumentSaveIcon(), makeBackupPanel(state))
 	case "Files":
 		addOrFocusTab(state, "Files", theme.FolderIcon(), makeFilesPanel(state))
 	case "Log":
@@ -283,11 +296,11 @@ func makeDashboardPanel(state *appState) fyne.CanvasObject {
 		widget.NewCard("System Identity", "General", container.NewVBox(
 			widget.NewLabel("Platform: x86_64 Minimalist Router"),
 			widget.NewLabel("Kernel: Linux 6.6 LTS"),
-			widget.NewLabel("OS: NetRouter OS v0.1.2"),
+			widget.NewLabel("OS: NetRouter OS v0.1.3"),
 		)),
 		widget.NewCard("Uplink / WAN", "Internet Status", container.NewVBox(
 			widget.NewLabel("Status: Connected (UP)"),
-			widget.NewLabel("Mode: DHCP Client"),
+			widget.NewLabel("Mode: DHCP Client / PPPoE Ready"),
 			widget.NewLabel("IP: 198.51.100.24/24"),
 		)),
 		widget.NewCard("LAN & Gateway", "Local Subnet", container.NewVBox(
@@ -295,7 +308,7 @@ func makeDashboardPanel(state *appState) fyne.CanvasObject {
 			widget.NewLabel("DHCP Server: Active (dnsmasq)"),
 			widget.NewLabel("Active Clients: 4 Leases"),
 		)),
-		widget.NewCard("Firewall & NAT", "Security", container.NewVBox(
+		widget.NewCard("Firewall & Security", "Stateful Rules", container.NewVBox(
 			widget.NewLabel("Masquerade: Enabled (WAN)"),
 			widget.NewLabel("Forwarding: Active (LAN -> WAN)"),
 			widget.NewLabel("Management: Port 8443 (mTLS)"),
@@ -371,7 +384,7 @@ func makeQuickSetPanel(state *appState) fyne.CanvasObject {
 			}, nil)
 		}
 
-		dialog.ShowInformation("Quick Set", "Quick Set configuration committed directly to Linux kernel and services.", state.window)
+		dialog.ShowInformation("Quick Set", "Quick Set configuration committed directly to Linux kernel and persistent store.", state.window)
 		refreshAllData(state)
 	})
 
@@ -492,14 +505,22 @@ func makeWANPanel(state *appState) fyne.CanvasObject {
 	txtDNS := widget.NewEntry()
 	txtDNS.SetText("1.1.1.1, 8.8.8.8")
 
+	txtPPPoEUser := widget.NewEntry()
+	txtPPPoEUser.SetPlaceHolder("ISP Username")
+
+	txtPPPoEPass := widget.NewPasswordEntry()
+	txtPPPoEPass.SetPlaceHolder("ISP Password")
+
 	generalTab := container.NewVBox(
 		widget.NewLabelWithStyle("WAN Uplink Configuration", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		selMode,
 		widget.NewForm(
 			widget.NewFormItem("Interface", txtIface),
-			widget.NewFormItem("IP Address", txtIP),
+			widget.NewFormItem("Static IP Address", txtIP),
 			widget.NewFormItem("Default Gateway", txtGateway),
 			widget.NewFormItem("DNS Servers", txtDNS),
+			widget.NewFormItem("PPPoE Username", txtPPPoEUser),
+			widget.NewFormItem("PPPoE Password", txtPPPoEPass),
 		),
 		widget.NewButtonWithIcon("Apply Changes", theme.ConfirmIcon(), func() {
 			if state.client != nil {
@@ -508,8 +529,14 @@ func makeWANPanel(state *appState) fyne.CanvasObject {
 				if selMode.Selected == "Static IP" {
 					_ = state.client.Call(ctx, protocol.AssignAddress, protocol.AssignAddressParams{Name: txtIface.Text, Address: txtIP.Text}, nil)
 					_ = state.client.Call(ctx, protocol.ReplaceRoute, protocol.ReplaceDefaultRouteParams{Device: txtIface.Text, Gateway: txtGateway.Text}, nil)
+				} else if selMode.Selected == "PPPoE" {
+					_ = state.client.Call(ctx, protocol.ApplyPPPoE, config.PPPoEConfig{
+						Username: txtPPPoEUser.Text,
+						Password: txtPPPoEPass.Text,
+						MTU:      1492,
+					}, nil)
 				}
-				dialog.ShowInformation("WAN", "WAN settings applied to Linux network stack.", state.window)
+				dialog.ShowInformation("WAN", "WAN settings applied directly to Linux network stack.", state.window)
 				refreshAllData(state)
 			}
 		}),
@@ -723,6 +750,61 @@ func makeFirewallPanel(state *appState) fyne.CanvasObject {
 	)
 }
 
+func makeWireGuardPanel(state *appState) fyne.CanvasObject {
+	chkEnable := widget.NewCheck("Enable WireGuard VPN Tunnel", nil)
+	txtIface := widget.NewEntry()
+	txtIface.SetText("wg0")
+	txtPort := widget.NewEntry()
+	txtPort.SetText("51820")
+	txtAddr := widget.NewEntry()
+	txtAddr.SetText("10.10.0.1/24")
+	txtPrivKey := widget.NewPasswordEntry()
+	txtPrivKey.SetPlaceHolder("Server Private Key (Base64)")
+	txtPeerPubKey := widget.NewEntry()
+	txtPeerPubKey.SetPlaceHolder("Client Peer Public Key")
+	txtAllowedIPs := widget.NewEntry()
+	txtAllowedIPs.SetText("10.10.0.2/32")
+
+	form := widget.NewForm(
+		widget.NewFormItem("Enable VPN", chkEnable),
+		widget.NewFormItem("Interface", txtIface),
+		widget.NewFormItem("Listen Port", txtPort),
+		widget.NewFormItem("Tunnel Address", txtAddr),
+		widget.NewFormItem("Private Key", txtPrivKey),
+		widget.NewFormItem("Peer Public Key", txtPeerPubKey),
+		widget.NewFormItem("Peer Allowed IPs", txtAllowedIPs),
+	)
+
+	btnApply := widget.NewButtonWithIcon("Apply WireGuard Settings", theme.ConfirmIcon(), func() {
+		if state.client != nil {
+			var port int = 51820
+			_, _ = fmt.Sscanf(txtPort.Text, "%d", &port)
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			_ = state.client.Call(ctx, protocol.ApplyWireGuard, config.WireGuardConfig{
+				Enabled:    chkEnable.Checked,
+				Interface:  txtIface.Text,
+				ListenPort: port,
+				PrivateKey: txtPrivKey.Text,
+				Address:    txtAddr.Text,
+				Peers: []config.WireGuardPeer{
+					{
+						PublicKey:  txtPeerPubKey.Text,
+						AllowedIPs: []string{txtAllowedIPs.Text},
+					},
+				},
+			}, nil)
+			dialog.ShowInformation("WireGuard", "WireGuard interface applied.", state.window)
+		}
+	})
+
+	return container.NewVBox(
+		widget.NewLabelWithStyle("WireGuard Secure Site-to-Site & Remote VPN", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		form,
+		btnApply,
+	)
+}
+
 func makeTrafficPanel(state *appState) fyne.CanvasObject {
 	state.trafficWANRX = widget.NewProgressBar()
 	state.trafficWANTX = widget.NewProgressBar()
@@ -733,19 +815,58 @@ func makeTrafficPanel(state *appState) fyne.CanvasObject {
 	state.lblLANStats = widget.NewLabel("LAN (ether2) — RX: 0 bps | TX: 0 bps")
 
 	return container.NewVBox(
-		widget.NewLabelWithStyle("Real-Time Traffic Monitor", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewLabelWithStyle("Real-Time Traffic Monitor & Live Waveform", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		widget.NewSeparator(),
+		state.lblWaveform,
 		widget.NewSeparator(),
 		state.lblWANStats,
-		widget.NewLabel("WAN RX Load:"),
+		widget.NewLabel("WAN RX Rate:"),
 		state.trafficWANRX,
-		widget.NewLabel("WAN TX Load:"),
+		widget.NewLabel("WAN TX Rate:"),
 		state.trafficWANTX,
 		widget.NewSeparator(),
 		state.lblLANStats,
-		widget.NewLabel("LAN RX Load:"),
+		widget.NewLabel("LAN RX Rate:"),
 		state.trafficLANRX,
-		widget.NewLabel("LAN TX Load:"),
+		widget.NewLabel("LAN TX Rate:"),
 		state.trafficLANTX,
+	)
+}
+
+func makeBackupPanel(state *appState) fyne.CanvasObject {
+	txtJSON := widget.NewMultiLineEntry()
+	txtJSON.SetPlaceHolder("Configuration JSON will be exported / imported here...")
+
+	btnExport := widget.NewButtonWithIcon("Export Configuration JSON", theme.DocumentSaveIcon(), func() {
+		if state.client != nil {
+			var raw json.RawMessage
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			if err := state.client.Call(ctx, protocol.ExportConfig, map[string]string{}, &raw); err == nil {
+				txtJSON.SetText(string(raw))
+				dialog.ShowInformation("Backup", "Configuration exported successfully from /etc/netrouter/config.json", state.window)
+			}
+		}
+	})
+
+	btnImport := widget.NewButtonWithIcon("Restore / Import Configuration", theme.UploadIcon(), func() {
+		if state.client != nil && strings.TrimSpace(txtJSON.Text) != "" {
+			ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+			defer cancel()
+			err := state.client.Call(ctx, protocol.ImportConfig, protocol.ImportConfigParams{ConfigJSON: txtJSON.Text}, nil)
+			if err != nil {
+				dialog.ShowError(err, state.window)
+				return
+			}
+			dialog.ShowInformation("Restore", "Configuration restored atomically and saved.", state.window)
+			refreshAllData(state)
+		}
+	})
+
+	return container.NewBorder(
+		widget.NewLabelWithStyle("Configuration Persistence, Backup & Restore", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		container.NewHBox(btnExport, btnImport), nil, nil,
+		txtJSON,
 	)
 }
 
@@ -773,7 +894,7 @@ func makeSystemPanel(state *appState) fyne.CanvasObject {
 		container.NewHBox(btnRename, btnReboot),
 		widget.NewSeparator(),
 		widget.NewLabel("Hardware Platform: x86_64"),
-		widget.NewLabel("OS Release: NetRouter OS 0.1.2"),
+		widget.NewLabel("OS Release: NetRouter OS 0.1.3"),
 		widget.NewLabel("Kernel: Linux 6.6.21"),
 	)
 }
@@ -828,7 +949,7 @@ func makeLogsPanel(state *appState) fyne.CanvasObject {
 
 func makeTerminalPanel(state *appState) fyne.CanvasObject {
 	state.termHistory = widget.NewMultiLineEntry()
-	state.termHistory.SetText("NetRouter OS v0.1.2 (x86_64) - Linux 6.6.21\nConnected via secure daemon IPC.\nType 'status', 'interfaces', 'traffic', 'leases', 'reboot', or 'help'.\n\nNetRouter-Core# ")
+	state.termHistory.SetText("NetRouter OS v0.1.3 (x86_64) - Linux 6.6.21\nConnected via secure daemon IPC.\nType 'status', 'interfaces', 'traffic', 'leases', 'reboot', or 'help'.\n\nNetRouter-Core# ")
 	state.termHistory.Disable()
 
 	cmdInput := widget.NewEntry()
@@ -861,6 +982,7 @@ func makeFilesPanel(state *appState) fyne.CanvasObject {
 		widget.NewSeparator(),
 		widget.NewLabel("Files on Router Storage (/var/netrouter):"),
 		widget.NewLabel(" • backup-2026-08-25.tar.gz (42 KB)"),
+		widget.NewLabel(" • config.json (2.4 KB)"),
 		widget.NewLabel(" • netrouter-custom.nft (2 KB)"),
 	)
 }
@@ -958,16 +1080,86 @@ func showConnectDialog(w fyne.Window, state *appState) {
 	keyFile := widget.NewEntry()
 	keyFile.SetPlaceHolder("Client private key path (PEM)")
 
-	form := dialog.NewForm(
-		"Connect to NetRouter OS",
-		"Connect",
-		"Cancel",
-		[]*widget.FormItem{
+	// Neighbor Discovery List
+	neighborHeaders := []string{"Identity", "IP Address", "MAC Address", "Architecture", "Version"}
+	neighborTable := widget.NewTable(
+		func() (int, int) {
+			state.mu.RLock()
+			defer state.mu.RUnlock()
+			return len(state.neighbors) + 1, len(neighborHeaders)
+		},
+		func() fyne.CanvasObject {
+			return widget.NewLabel("template")
+		},
+		func(id widget.TableCellID, obj fyne.CanvasObject) {
+			label := obj.(*widget.Label)
+			if id.Row == 0 {
+				label.SetText(neighborHeaders[id.Col])
+				label.TextStyle = fyne.TextStyle{Bold: true}
+				return
+			}
+			state.mu.RLock()
+			defer state.mu.RUnlock()
+			if id.Row-1 >= len(state.neighbors) {
+				return
+			}
+			n := state.neighbors[id.Row-1]
+			vals := []string{n.Identity, n.IPv4, n.MAC, n.Architecture, n.Version}
+			label.SetText(vals[id.Col])
+		},
+	)
+	neighborTable.SetColumnWidth(0, 130)
+	neighborTable.SetColumnWidth(1, 120)
+	neighborTable.SetColumnWidth(2, 140)
+	neighborTable.SetColumnWidth(3, 90)
+	neighborTable.SetColumnWidth(4, 70)
+
+	neighborTable.OnSelected = func(id widget.TableCellID) {
+		if id.Row > 0 {
+			state.mu.RLock()
+			if id.Row-1 < len(state.neighbors) {
+				address.SetText(fmt.Sprintf("%s:%d", state.neighbors[id.Row-1].IPv4, state.neighbors[id.Row-1].Port))
+			}
+			state.mu.RUnlock()
+		}
+	}
+
+	btnDiscover := widget.NewButtonWithIcon("Scan Neighbors (L2/L3 NDP)", theme.SearchIcon(), func() {
+		go func() {
+			devs, err := network.ScanNeighbors(2 * time.Second)
+			if err == nil {
+				state.mu.Lock()
+				state.neighbors = devs
+				state.mu.Unlock()
+				neighborTable.Refresh()
+			}
+		}()
+	})
+
+	connectTab := container.NewVBox(
+		widget.NewForm(
 			widget.NewFormItem("Router Address", address),
 			widget.NewFormItem("CA Certificate", caFile),
 			widget.NewFormItem("Client Certificate", certFile),
 			widget.NewFormItem("Client Key", keyFile),
-		},
+		),
+	)
+
+	discoveryTab := container.NewBorder(
+		btnDiscover, nil, nil, nil,
+		neighborTable,
+	)
+
+	tabs := container.NewAppTabs(
+		container.NewTabItem("Direct Connect", connectTab),
+		container.NewTabItem("Neighbor Discovery", discoveryTab),
+	)
+
+	d := dialog.NewCustomConfirm(
+		"Connect to NetRouter OS",
+		"Connect",
+		"Cancel",
+		tabs,
 		func(ok bool) {
 			if !ok {
 				return
@@ -1001,12 +1193,12 @@ func showConnectDialog(w fyne.Window, state *appState) {
 		},
 		w,
 	)
-	form.Resize(fyne.NewSize(540, 300))
-	form.Show()
+	d.Resize(fyne.NewSize(620, 380))
+	d.Show()
 }
 
 func showPreferencesDialog(w fyne.Window, state *appState) {
-	dialog.ShowInformation("Preferences", "NetRouter Manager v0.1.2\nEngineered for high-density, low-latency router administration.", w)
+	dialog.ShowInformation("Preferences", "NetRouter Manager v0.1.3\nEngineered for high-density, low-latency router administration.", w)
 }
 
 func showRebootDialog(w fyne.Window, state *appState) {
@@ -1112,12 +1304,40 @@ func refreshAllData(state *appState) {
 		for _, it := range tf.Interfaces {
 			if it.Name == "ether1" && state.lblWANStats != nil {
 				state.lblWANStats.SetText(fmt.Sprintf("WAN (ether1) — RX: %.2f Mbps | TX: %.2f Mbps", float64(it.RxRateBps)/1000000.0, float64(it.TxRateBps)/1000000.0))
+				if len(it.HistoryRxRate) > 0 && state.lblWaveform != nil {
+					state.lblWaveform.SetText(renderWaveformString(it.HistoryRxRate))
+				}
 			} else if it.Name == "ether2" && state.lblLANStats != nil {
 				state.lblLANStats.SetText(fmt.Sprintf("LAN (ether2) — RX: %.2f Mbps | TX: %.2f Mbps", float64(it.RxRateBps)/1000000.0, float64(it.TxRateBps)/1000000.0))
 			}
 		}
 		state.mu.Unlock()
 	}
+}
+
+func renderWaveformString(history []uint64) string {
+	if len(history) == 0 {
+		return "Waveform: [No samples]"
+	}
+	var max uint64 = 1
+	for _, v := range history {
+		if v > max {
+			max = v
+		}
+	}
+
+	blocks := []rune{' ', '▂', '▃', '▄', '▅', '▆', '▇', '█'}
+	var b strings.Builder
+	b.WriteString("Live Waveform (60s): [")
+	for _, v := range history {
+		idx := int((v * uint64(len(blocks)-1)) / max)
+		if idx >= len(blocks) {
+			idx = len(blocks) - 1
+		}
+		b.WriteRune(blocks[idx])
+	}
+	b.WriteString(fmt.Sprintf("] Peak: %.2f Mbps", float64(max)/1000000.0))
+	return b.String()
 }
 
 func startTelemetryPoller(state *appState) {
